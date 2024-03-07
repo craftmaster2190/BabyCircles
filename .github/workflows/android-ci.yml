@@ -1,0 +1,75 @@
+name: Android CI
+
+env:
+  # The name of the main module repository
+  main_project_module: app
+  # Bump to move to next release
+  app_version: v1.0
+
+on:
+  # Triggers the workflow on push or pull request events but only for default and protected branches
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  buildAndReleaseApk:
+    name: Build and Release APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout latest code
+        uses: actions/checkout@v4
+
+      - name: Set Up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: adopt
+          java-version: 17
+
+      - name: Permit Gradle wrapper to execute
+        run: chmod +x ./gradlew
+
+      - name: Build gradle project ${{ env.app_version }}
+        run: ./gradlew build
+
+      - name: Run gradle tests ${{ env.app_version }}
+        run: ./gradlew test
+
+      - name: Build apk signed release (APK) - ${{ env.main_project_module }} module ${{ env.app_version }}
+        env:
+          ANDROID_RELEASE_KEY_BASE64: ${{ secrets.ANDROID_RELEASE_KEY_BASE64 }}
+          ANDROID_RELEASE_STOREPASS: ${{ secrets.ANDROID_RELEASE_STOREPASS }}
+          ANDROID_RELEASE_ALIAS: ${{ secrets.ANDROID_RELEASE_ALIAS }}
+        run: |
+          ANDROID_RELEASE_KEY="android-release-key.jks"
+          echo "${ANDROID_RELEASE_KEY_BASE64}" | base64 --decode > "${ANDROID_RELEASE_KEY}"
+          ANDROID_RELEASE_KEY="$(realpath "${ANDROID_RELEASE_KEY}")"
+          ./gradlew ${{ env.main_project_module }}:packageReleaseUniversalApk \
+            -Pandroid.injected.signing.store.file="${ANDROID_RELEASE_KEY}" \
+            -Pandroid.injected.signing.store.password="${ANDROID_RELEASE_STOREPASS}" \
+            -Pandroid.injected.signing.key.alias="${ANDROID_RELEASE_ALIAS}" \
+            -Pandroid.injected.signing.key.password="${ANDROID_RELEASE_STOREPASS}"
+          
+          find ${{ env.main_project_module }}/build/outputs
+          mv -v ${{ env.main_project_module }}/build/outputs/apk_from_bundle/release/app-release-universal.apk ./${{ github.event.repository.name }}-Release-${{ env.app_version }}.apk
+
+      - name: Persist APK ${{ env.app_version }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }} Release ${{ env.app_version }} APK
+          path: "*.apk"
+
+      - name: Release APK to Github - ${{ env.main_project_module }} module ${{ env.app_version }}
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "*.apk"
+          allowUpdates: false
+          skipIfReleaseExists: true
+          tag: "${{ env.app_version }}"
